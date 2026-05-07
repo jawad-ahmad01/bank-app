@@ -6,12 +6,11 @@ on:
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/bank-app
+  # This helps suppress Node warnings on newer runners
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
 jobs:
-  # ─────────────────────────────
-  # JOB 1: BUILD
-  # ─────────────────────────────
+  # 1. BUILD JOB
   build:
     runs-on: self-hosted
     steps:
@@ -23,48 +22,59 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: maven
 
       - name: Build with Maven
         run: mvn clean package -DskipTests
 
-      - name: Upload JAR
+      # Upload the entire target folder (classes for Sonar, JAR for Docker)
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: app-jar
-          path: target/*.jar
+          name: build-assets
+          path: target/
 
-  # ─────────────────────────────
-  # JOB 2: SONARQUBE SCAN
-  # ─────────────────────────────
+  # 2. SONARQUBE SCAN
   sonarqube:
     runs-on: self-hosted
     needs: build
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
-      - name: Download JAR
+      - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: app-jar
-          path: target
+          name: build-assets
+          path: target/
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4.5.0
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: SonarQube Scan
         run: |
           mvn sonar:sonar \
             -Dsonar.projectKey=bank-app \
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.java.binaries=target/classes
 
-  # ─────────────────────────────
-  # JOB 3: DOCKER BUILD & PUSH
-  # ─────────────────────────────
+  # 3. DOCKER BUILD & PUSH
   docker-build-push:
     runs-on: self-hosted
     needs: sonarqube
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-assets
+          path: target/
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -81,39 +91,29 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-  # ─────────────────────────────
-  # JOB 4: TRIVY SCAN
-  # ─────────────────────────────
+  # 4. TRIVY SCAN
   trivy-scan:
     runs-on: self-hosted
     needs: docker-build-push
     steps:
-      - name: Install Trivy
-        run: |
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
-            | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb generic main" \
-            | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update && sudo apt-get install -y trivy
-
       - name: Trivy Image Scan
         run: |
-          trivy image \
-            --exit-code 0 \
+          # Use Docker to run Trivy so you don't have to install it manually every time
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
             --severity HIGH,CRITICAL \
-            --format table \
             ${{ env.IMAGE_NAME }}:latest
 
-  # ─────────────────────────────
-  # JOB 5: UPDATE K8S MANIFEST
-  # ─────────────────────────────
+  # 5. UPDATE K8S MANIFEST
   update-manifest:
     runs-on: self-hosted
     needs: trivy-scan
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
+          # You need a Personal Access Token (PAT) if you want to trigger another 
+          # workflow (like ArgoCD sync) upon pushing back to the repo.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update Image Tag
