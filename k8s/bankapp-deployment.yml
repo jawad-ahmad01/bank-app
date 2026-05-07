@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: bankapp
-          image: bank-app-bankapp:latest
-          imagePullPolicy: Never
+          image: jawadahmad68/bank-app:latest
+          imagePullPolicy: always 
           ports:
             - containerPort: 8080
           env:
