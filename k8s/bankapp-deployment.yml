@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: bankapp
-          image: springboot-bankapp-bankapp:latest
+          image: bank-app-bankapp:latest
           imagePullPolicy: Never
           ports:
             - containerPort: 8080
